@@ -13,8 +13,21 @@ class DispatcherTracker:
     supplies a common interface used by the API layer.
     """
 
-    def __init__(self, weights: str | Path = "yolov8n.pt", device: str | None = None):
-        self.model = YOLO(str(weights))
+    DEFAULT_MODEL_PATH = Path("models/dispatch_tracker/weights/best.pt")
+
+    def __init__(self, weights: str | Path | None = None, device: str | None = None):
+        if weights is None:
+            if self.DEFAULT_MODEL_PATH.exists():
+                model_path = self.DEFAULT_MODEL_PATH
+                print(f"Loading custom model: {model_path}")
+            else:
+                model_path = "yolov8n.pt"
+                print(f"Custom model not found. Loading default: {model_path}")
+        else:
+            model_path = weights
+            print(f"Loading specified model: {model_path}")
+
+        self.model = YOLO(str(model_path))
         if device:
             self.model.to(device)
 

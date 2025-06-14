@@ -1,0 +1,5 @@
+train: /app/datasets/AU/Dataset/Detection/train/images
+val: /app/datasets/AU/Dataset/Detection/val/images
+
+nc: 2
+names: ['dish', 'tray'] 

@@ -3,14 +3,39 @@ services:
     build: .
     container_name: dispatch-monitor
     volumes:
-      - ./datasets:/app/datasets:ro
-      - ./src:/app/src # dev, remove in prod
+      - ./datasets:/app/datasets
+      - ./models:/app/models
+      - ./src:/app/src
     ports:
       - "8000:8000"
+    shm_size: '8g'
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1 # my dev machine has 1 gpu
+              count: 1
+              capabilities: [gpu]
+
+  train:
+    build: .
+    container_name: dispatch-monitor-training
+    command: >
+      python src/train.py 
+      --data dispatch_data.yaml 
+      --epochs 50 
+      --batch-size 8 
+      --weights yolov8n.pt 
+      --project models 
+      --name dispatch_tracker
+    volumes:
+      - ./datasets:/app/datasets:ro
+      - ./src:/app/src
+      - ./dispatch_data.yaml:/app/dispatch_data.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
               capabilities: [gpu]
