@@ -1,0 +1,16 @@
+services:
+  dispatch-monitor:
+    build: .
+    container_name: dispatch-monitor
+    volumes:
+      - ./datasets:/app/datasets:ro
+      - ./src:/app/src # dev, remove in prod
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1 # my dev machine has 1 gpu
+              capabilities: [gpu]
