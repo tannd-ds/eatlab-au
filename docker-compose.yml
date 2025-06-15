@@ -1,4 +1,34 @@
 services:
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=mlflow_user
+      - POSTGRES_PASSWORD=mlflow_password
+      - POSTGRES_DB=mlflow_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: mlflow.Dockerfile
+    container_name: mlflow-server
+    restart: always
+    ports:
+      - "5000:5000"
+    command: >
+      mlflow server 
+      --host 0.0.0.0 
+      --port 5000
+      --backend-store-uri postgresql://mlflow_user:mlflow_password@postgres:5432/mlflow_db
+      --default-artifact-root ./mlruns
+    depends_on:
+      - postgres
+
   dispatch-monitor:
     build: .
     container_name: dispatch-monitor
@@ -8,6 +38,8 @@ services:
       - ./src:/app/src
     ports:
       - "8000:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
     shm_size: '8g'
     deploy:
       resources:
@@ -25,13 +57,14 @@ services:
       --data dispatch_data.yaml 
       --epochs 50 
       --batch-size 8 
-      --weights yolov8n.pt 
-      --project models 
-      --name dispatch_tracker
+      --weights yolov8n.pt
     volumes:
-      - ./datasets:/app/datasets:ro
+      - ./datasets:/app/datasets
+      - ./models:/app/models
       - ./src:/app/src
       - ./dispatch_data.yaml:/app/dispatch_data.yaml
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
     deploy:
       resources:
         reservations:
@@ -39,3 +72,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+volumes:
+  postgres_data:
