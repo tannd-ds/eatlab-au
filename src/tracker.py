@@ -3,7 +3,12 @@ from typing import List, Dict, Any
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
+import mlflow
+import os
+mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI"))
+
+model_uri = "models:/dispatch_tracker_yolov8n/latest"
+loaded_model = mlflow.pyfunc.load_model(model_uri)
 
 
 class DispatcherTracker:
@@ -27,7 +32,7 @@ class DispatcherTracker:
             model_path = weights
             print(f"Loading specified model: {model_path}")
 
-        self.model = YOLO(str(model_path))
+        self.model = loaded_model
         if device:
             self.model.to(device)
 

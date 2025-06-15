@@ -1,16 +1,57 @@
 services:
   postgres:
+    restart: always
     image: postgres:13
     container_name: postgres
-    restart: always
     environment:
-      - POSTGRES_USER=mlflow_user
-      - POSTGRES_PASSWORD=mlflow_password
-      - POSTGRES_DB=mlflow_db
-    ports:
-      - "5432:5432"
+      - POSTGRES_USER=${PG_USER}
+      - POSTGRES_PASSWORD=${PG_PASSWORD}
+      - POSTGRES_DB=${PG_DB}
+    expose:
+      - "${PG_PORT}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - au-network
+
+  minio:
+    restart: always
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_ADDRESS=${MINIO_ADDRESS}
+      - MINIO_PORT=${MINIO_PORT}
+      - MINIO_STORAGE_USE_HTTPS=${MINIO_STORAGE_USE_HTTPS}
+      - MINIO_CONSOLE_ADDRESS=${MINIO_CONSOLE_ADDRESS}
+    ports:
+      - "${MINIO_PORT}:${MINIO_PORT}" 
+      - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_PORT}" 
+    command: server /data
+    volumes:
+      - minio_data:/data
+    networks:
+      - au-network
+
+  create-buckets:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+
+      until /usr/bin/mc alias set myminio http://minio:${MINIO_PORT} ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; do
+        echo 'Waiting for minio to be ready...';
+        sleep 1;
+      done;
+
+      /usr/bin/mc mb myminio/mlflow;
+      /usr/bin/mc policy set public myminio/mlflow;
+      exit 0;
+      "
+    networks:
+      - au-network
 
   mlflow:
     build:
@@ -19,28 +60,37 @@ services:
     container_name: mlflow-server
     restart: always
     ports:
-      - "5000:5000"
+      - "${MLFLOW_PORT}:${MLFLOW_PORT}"
+    environment:
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
     command: >
       mlflow server 
       --host 0.0.0.0 
-      --port 5000
-      --backend-store-uri postgresql://mlflow_user:mlflow_password@postgres:5432/mlflow_db
-      --default-artifact-root ./mlruns
+      --port ${MLFLOW_PORT}
+      --backend-store-uri postgresql://${PG_USER}:${PG_PASSWORD}@postgres:${PG_PORT}/${PG_DB}
+      --serve-artifacts
+      --artifacts-destination s3://${MINIO_BUCKET_NAME}
     depends_on:
       - postgres
+      - create-buckets
+    networks:
+      - au-network
 
   dispatch-monitor:
     build: .
     container_name: dispatch-monitor
     volumes:
       - ./datasets:/app/datasets
-      - ./models:/app/models
       - ./src:/app/src
     ports:
-      - "8000:8000"
+      - "${DISPATCH_MONITOR_PORT}:${DISPATCH_MONITOR_PORT}"
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-    shm_size: '8g'
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_PORT}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
     deploy:
       resources:
         reservations:
@@ -48,6 +98,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    depends_on:
+      - mlflow
+    networks:
+      - au-network
 
   train:
     build: .
@@ -58,13 +112,17 @@ services:
       --epochs 50 
       --batch-size 8 
       --weights yolov8n.pt
+      --project dispatch_tracker
+      --name ${INITIAL_RUN_NAME}
     volumes:
       - ./datasets:/app/datasets
-      - ./models:/app/models
       - ./src:/app/src
       - ./dispatch_data.yaml:/app/dispatch_data.yaml
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_PORT}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
     deploy:
       resources:
         reservations:
@@ -72,6 +130,15 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    depends_on:
+      - mlflow
+    networks:
+      - au-network
 
 volumes:
   postgres_data:
+  minio_data:
+
+networks:
+  au-network:
+    driver: bridge

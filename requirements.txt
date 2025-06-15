@@ -5,3 +5,8 @@ numpy
 ultralytics
 scikit-learn
 python-multipart
+
+# MLFlow n database
+mlflow
+psycopg2-binary
+boto3
