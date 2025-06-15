@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dispatch Monitoring System</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Dispatch Monitoring System</h1>
+
+    <!-- Model Selection Section -->
+    <div class="section" id="model-selection-section">
+        <h2>Model Selection</h2>
+        <p>Choose an experiment and run to load a specific model.</p>
+        <div class="model-controls">
+            <select id="experimentSelect" class="styled-select"></select>
+            <select id="runSelect" class="styled-select"></select>
+            <button id="loadModelBtn">Load Model</button>
+        </div>
+        <div id="model-status">Status: No model loaded.</div>
+    </div>
+
+    <div class="container">
+        <!-- Image Inference Section -->
+        <div class="section">
+            <h2>Image Inference</h2>
+            <p>Upload an image to run inference and see the annotated result.</p>
+            <input type="file" id="imageUpload" accept="image/png, image/jpeg, image/jpg">
+            <button id="uploadImageBtn">Upload and Infer</button>
+            <div id="imageResult" class="result-container"></div>
+        </div>
+
+        <!-- Video Inference Section -->
+        <div class="section">
+            <h2>Video Inference</h2>
+            <p>Click the button to start inference on a pre-recorded video.</p>
+            <button id="startVideoBtn">Start Video Inference</button>
+            <button id="stopVideoBtn" disabled>Stop Inference</button>
+            <div id="videoResult" class="result-container">
+                <canvas id="videoCanvas"></canvas>
+            </div>
+            <div id="video-status"></div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html> 

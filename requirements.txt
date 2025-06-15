@@ -5,8 +5,13 @@ numpy
 ultralytics
 scikit-learn
 python-multipart
+lap
 
 # MLFlow n database
 mlflow
 psycopg2-binary
 boto3
+gradio
+
+# Video streaming
+sse-starlette
