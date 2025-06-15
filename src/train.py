@@ -15,7 +15,7 @@ def train(data_config_path: str, epochs: int, batch_size: int, weights: str, nam
     mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI"))
     mlflow.set_experiment(project)
 
-    with mlflow.start_run(run_name=name):
+    with mlflow.start_run(run_name=name) as run:
         mlflow.log_params({
             "data_config": data_config_path,
             "epochs": epochs,
@@ -36,7 +36,15 @@ def train(data_config_path: str, epochs: int, batch_size: int, weights: str, nam
             exist_ok=True, 
             workers=0,
         )
-        print("Training finished.")
+        print("[INFO] Training finished.")
+    
+        print(f"[INFO] Registering model from run {run.info.run_id}.")
+        registered_model_name = f"{project}_yolov8n"
+        mlflow.register_model(
+            model_uri=f"mlflow-artifacts:/{run.info.run_id}/artifacts/weights/best.pt",
+            name=registered_model_name
+        )
+        print(f"[INFO] Model '{registered_model_name}' registered from run {run.info.run_id}.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Train")
