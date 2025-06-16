@@ -6,6 +6,8 @@ ultralytics
 scikit-learn
 python-multipart
 lap
+shapely
+Pillow
 
 # MLFlow n database
 mlflow
@@ -15,6 +17,3 @@ gradio
 
 # Video streaming
 sse-starlette
-
-# Added shapely
-shapely

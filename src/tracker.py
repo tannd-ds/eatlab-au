@@ -10,11 +10,16 @@ import asyncio
 import base64
 import time
 from shapely.geometry import Point, Polygon
+import torch
+from torchvision import transforms
+from PIL import Image
 
 from .track.BaseTrack import TrackedObject
 
 # --- Globals ---
 mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+client = mlflow.MlflowClient()
+
 
 class DispatcherTracker:
     """
@@ -25,7 +30,8 @@ class DispatcherTracker:
     def __init__(self, 
                  weights: str | Path | None = None, 
                  device: str | None = None,
-                 zones: Dict[str, List[Tuple[int, int]]] | None = None):
+                 zones: Dict[str, List[Tuple[int, int]]] | None = None,
+                 classifier_experiment: str = 'dispatch_classifier'):
         if weights:
             model_path = weights
             print(f"Loading specified model: {model_path}")
@@ -37,14 +43,52 @@ class DispatcherTracker:
             print(f"Custom model not found. Loading default YOLOv8n: {model_path}")
 
         self.model = YOLO(model_path)
-        if device:
-            self.model.to(device)
+        self.device = device if device else ("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
 
         self.tracked_objects: Dict[int, TrackedObject] = {}
         self.zones: Dict[str, Polygon] = {}
 
         if zones:
             self.set_zones(zones)
+        
+        # --- Load Classifier ---
+        self.classifier = None
+        try:
+            print(f"Attempting to load classifier from experiment '{classifier_experiment}'...")
+            experiment = client.get_experiment_by_name(classifier_experiment)
+            if not experiment:
+                print(f"MLflow experiment '{classifier_experiment}' not found. Classifier will not be loaded.")
+                model_uri = None
+            else:
+                experiment_id = experiment.experiment_id
+                
+                logged_models = client.search_logged_models(
+                    experiment_ids=[experiment_id],
+                    max_results=1
+                )
+
+                model_uri = None
+                if logged_models:
+                    latest_model = logged_models[0]
+                    model_uri = latest_model.artifact_location
+                    print(f"Found latest classifier model URI: {model_uri}")
+                else:
+                    print(f"No logged models found in experiment '{classifier_experiment}'. Classifier will not be loaded.")
+
+            self.classifier = mlflow.pytorch.load_model(model_uri, map_location=self.device)
+            self.classifier.eval()
+            print(f"Successfully loaded classifier model from run '{model_uri}'")
+            
+            self.classifier_transform = transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+            self.classifier_class_names = ['empty', 'not_empty', 'kakigori']
+        except Exception as e:
+            print(f"Error loading classifier model: {e}. Classifier not loaded.")
 
     def set_zones(self, zones: Dict[str, List[Tuple[int, int]]]):
         """Defines polygonal zones for monitoring."""
@@ -57,6 +101,23 @@ class DispatcherTracker:
             if poly.contains(point):
                 return name
         return None
+
+    def _predict_dish(self, frame_crop: np.ndarray) -> str | None:
+        if not self.classifier:
+            return None
+        
+        try:
+            pil_image = Image.fromarray(cv2.cvtColor(frame_crop, cv2.COLOR_BGR2RGB))
+            input_tensor = self.classifier_transform(pil_image)
+            input_batch = input_tensor.unsqueeze(0).to(self.device)
+            
+            with torch.no_grad():
+                output = self.classifier(input_batch)
+                _, pred_idx = torch.max(output, 1)
+            
+            return self.classifier_class_names[pred_idx.item()]
+        except Exception as e:
+            return None
 
     def _update_object_state(self, 
                              track_id: int, 
@@ -126,10 +187,13 @@ class DispatcherTracker:
                         if event:
                             current_frame_events.append(event)
 
+                        dish_crop = frame[y1:y2, x1:x2]
+                        dish_name = self._predict_dish(dish_crop) or "unknown"
+
                         frame_detections.append({
                             "bbox": [x1, y1, x2, y2],
                             "confidence": float(box.conf.item()),
-                            "label": self.model.names[int(box.cls.item())],
+                            "label": self.model.names[int(box.cls.item())] + '_' + dish_name,
                             "track_id": track_id,
                         })
 
