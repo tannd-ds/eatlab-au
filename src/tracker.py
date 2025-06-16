@@ -11,6 +11,8 @@ import base64
 import time
 from shapely.geometry import Point, Polygon
 
+from .track.BaseTrack import TrackedObject
+
 # --- Globals ---
 mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
 
@@ -38,7 +40,7 @@ class DispatcherTracker:
         if device:
             self.model.to(device)
 
-        self.tracked_objects: Dict[int, Dict[str, Any]] = {}
+        self.tracked_objects: Dict[int, TrackedObject] = {}
         self.zones: Dict[str, Polygon] = {}
 
         if zones:
@@ -49,58 +51,39 @@ class DispatcherTracker:
         self.zones = {name: Polygon(points) for name, points in zones.items()}
         print(f"Zones set: {list(self.zones.keys())}")
 
+    def _find_zone_for_point(self, point: Point) -> str | None:
+        """Finds which zone a point is inside."""
+        for name, poly in self.zones.items():
+            if poly.contains(point):
+                return name
+        return None
+
     def _update_object_state(self, 
                              track_id: int, 
                              centroid: Point, 
-                             current_time: float, 
-                             event_type: str) -> Dict[str, Any] | None:
+                             current_time: float) -> dict | None:
         """Update the state of a tracked object and generate an event if the state changes."""
+        current_zone = self._find_zone_for_point(centroid)
+        tracked_obj = self.tracked_objects.get(track_id)
 
-        current_zone = None
-        for name, poly in self.zones.items():
-            if poly.contains(centroid):
-                current_zone = name
-                break
-
-        previous_state = self.tracked_objects.get(track_id)
-
-
-        if not previous_state:
+        if not tracked_obj:
             if current_zone:
-                self.tracked_objects[track_id] = {
-                    "zone": current_zone,
-                    "dwell_start": current_time,
-                    "history": [current_zone]
-                }
+                # this mean this is a new object
+                self.tracked_objects[track_id] = TrackedObject(track_id, centroid, current_zone, current_time)
+
                 return {
-                    "event": f"item_{event_type}",
+                    "event": f"item_entered",
                     "track_id": track_id,
                     "to_zone": current_zone,
                 }
-        else:
-            self.tracked_objects[track_id]["centroid"] = (int(centroid.x), int(centroid.y))
-            previous_zone = previous_state["zone"]
-            if current_zone != previous_zone:
-                dwell_time = round(current_time - previous_state["dwell_start"], 2)
-                
-                event_data = {
-                    "event": f"item_{event_type}",
-                    "track_id": track_id,
-                    "from_zone": previous_zone,
-                    "to_zone": current_zone,
-                    "dwell_time": dwell_time,
-                }
-                
-                if not current_zone:
-                    del self.tracked_objects[track_id]
-                else:
-                    previous_state["zone"] = current_zone
-                    previous_state["dwell_start"] = current_time
-                    previous_state["history"].append(current_zone)
-                
-                return event_data
+            return None # no zone found
+
+        event = tracked_obj.update_position(centroid, current_zone, current_time)
+
+        if tracked_obj.current_zone != current_zone:
+            del self.tracked_objects[track_id]
         
-        return None
+        return event
 
     async def track_video_stream(self, source) -> AsyncGenerator[str, None]:
         cap = cv2.VideoCapture(int(source) if str(source).isdigit() else str(source))
@@ -120,12 +103,12 @@ class DispatcherTracker:
 
                 for name, poly in self.zones.items():
                     pts = np.array(poly.exterior.coords, dtype=np.int32)
-                    cv2.polylines(frame, [pts], isClosed=True, color=(0, 255, 255), thickness=2)
-                    cv2.putText(frame, name, (pts[0][0], pts[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-
                     frame_to_track = frame[pts[0][1]:pts[2][1], pts[0][0]:pts[2][0]]
                     offset_x = pts[0][0]
                     offset_y = pts[0][1]
+
+                    cv2.polylines(frame, [pts], isClosed=True, color=(0, 255, 255), thickness=2)
+                    cv2.putText(frame, name, (pts[0][0], pts[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
                     results = self.model.track(frame_to_track, stream=False, persist=True, verbose=False)
                     if results:
@@ -139,7 +122,7 @@ class DispatcherTracker:
                         track_id = int(box.id.item())
                         centroid = Point((x1 + x2) / 2, (y1 + y2) / 2)
                         
-                        event = self._update_object_state(track_id, centroid, current_time, "detected")
+                        event = self._update_object_state(track_id, centroid, current_time)
                         if event:
                             current_frame_events.append(event)
 
@@ -151,10 +134,9 @@ class DispatcherTracker:
                         })
 
                 # update state for other objects
-                for track_id, data in self.tracked_objects.items():
+                for track_id, obj in self.tracked_objects.items():
                     if track_id not in [box.id.item() for box in results.boxes]:
-                        print(f"[DEBUG] {data} not in results")
-                        event = self._update_object_state(track_id, Point(data["centroid"]), current_time, "lost")
+                        event = self._update_object_state(track_id, Point(-1, -1), current_time)
                         if event:
                             current_frame_events.append(event)
 
@@ -162,8 +144,12 @@ class DispatcherTracker:
                 frame_b64 = base64.b64encode(buffer).decode('utf-8')
 
                 active_objects = {
-                    tid: {**data, "dwell_time": round(current_time - data["dwell_start"], 2)}
-                    for tid, data in self.tracked_objects.items()
+                    tid: {
+                        **obj.details(current_time),
+                        "dwell_time": round(current_time - obj.dwell_start_time, 2),
+                        "centroid": obj.centroid,
+                    }
+                    for tid, obj in self.tracked_objects.items()
                 }
 
                 data_to_stream = {
