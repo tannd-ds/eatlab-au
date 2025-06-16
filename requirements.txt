@@ -15,3 +15,6 @@ gradio
 
 # Video streaming
 sse-starlette
+
+# Added shapely
+shapely

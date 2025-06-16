@@ -20,17 +20,25 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # --- Globals ---
 detector: DispatcherTracker | None = None
 VIDEO_PATH = "datasets/AU/1473_CH05_20250501133703_154216.mp4"
+DISPATCH_ZONES = {
+    "staging_area": [
+        (900, 50), (1500, 50), (1500, 300), (900, 300)
+    ]
+}
 
 @app.on_event("startup")
 def startup_event():
-    """Initialise the model tracker on startup."""
+    """Initialise the model tracker and database on startup."""
     global detector
+    database.init_db()
     mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
     detector = DispatcherTracker()
-    print("Default model loaded.")
+    detector.set_zones(DISPATCH_ZONES)
+    print("Default model loaded and zones configured.")
 
 
 class FeedbackIn(BaseModel):
+    source_video: str
     frame: int
     bbox: List[float]  # [x1,y1,x2,y2]
     correct_label: str
@@ -95,6 +103,7 @@ async def load_model(payload: Dict[str, str]):
         
         # Re-init
         detector = DispatcherTracker(weights=local_path)
+        detector.set_zones(DISPATCH_ZONES)
         print(f"Successfully loaded model from {local_path}")
         return {"message": f"Model '{artifact_path}' loaded successfully."}
     except Exception as e:
@@ -107,45 +116,17 @@ def health_check() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/infer")
-async def infer(file: UploadFile = File(...)):
-    """Run detection/tracking on an uploaded image or video file."""
-    if not detector:
-        raise HTTPException(status_code=503, detail="Model not loaded. Please select a model.")
-    # Save upload to a temporary file on disk (for video handling)
-    suffix = Path(file.filename).suffix
-    temp_dir = tempfile.gettempdir()
-    temp_path = Path(temp_dir) / f"{uuid.uuid4().hex}{suffix}"
-    with temp_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    if suffix.lower() in {".jpg", ".jpeg", ".png"}:
-        # Image
-        import cv2
-        img = cv2.imread(str(temp_path))
-        if img is None:
-            raise HTTPException(status_code=400, detail="Invalid image file.")
-        detections = detector.infer(img)
-        temp_path.unlink(missing_ok=True)
-        return JSONResponse(content={"detections": detections})
-    else:
-        # Assume video
-        results = detector.track_video(temp_path)
-        temp_path.unlink(missing_ok=True)
-        return JSONResponse(content={"frames": results})
-
-
 @app.get("/video-stream")
 async def video_stream(request: Request):
     """Streams annotated video frames using Server-Sent Events."""
     if not detector:
         raise HTTPException(status_code=503, detail="Model not loaded. Please select a model.")
-    stream_generator = detector.track_video_stream(VIDEO_PATH, area=(900, 50, 1500, 300))
-    return EventSourceResponse(stream_generator)
+    stream_generator = detector.track_video_stream(VIDEO_PATH)
+    return EventSourceResponse(stream_generator, media_type="text/event-stream")
 
 
 @app.post("/feedback")
 async def feedback(data: FeedbackIn):
-    """Persist user feedback to disk for later retraining."""
+    """Persist user feedback to the database for later retraining."""
     save_feedback(data.dict())
     return {"message": "Thank you for your feedback!"} 
