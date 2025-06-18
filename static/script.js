@@ -19,6 +19,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let eventSource;
 
+    let all_events = [];
+
     // --- Model Loading Logic ---
     async function fetchExperiments() {
         try {
@@ -35,6 +37,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.error('Error fetching experiments:', error);
             modelStatus.textContent = 'Error: Could not load experiments from MLflow.';
+        } finally {
+            loadModelBtn.disabled = false;
         }
     }
 
@@ -97,71 +101,43 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- Image Inference ---
-    uploadImageBtn.addEventListener('click', async () => {
-        const file = imageUpload.files[0];
-        if (!file) {
-            alert('Please select an image file first.');
-            return;
-        }
+    // --- Video Inference ---
+    function updateStatus(statusData) {
+        const { active_objects, events } = statusData;
+        let statusHTML = '<h3>Real-time Status</h3>';
 
-        const formData = new FormData();
-        formData.append('file', file);
-
-        try {
-            const response = await fetch('/infer', {
-                method: 'POST',
-                body: formData,
+        // Display recent events
+        if (events && events.length > 0) {
+            statusHTML += '<h4>Recent Events:</h4><ul class="events-list">';
+            // Show latest 5 events
+            events.slice(-5).reverse().forEach(e => {
+                let eventText = `(${new Date().toLocaleTimeString()}) #${e.track_id}: ${e.event}`;
+                if (e.to_zone) eventText += ` -> ${e.to_zone}`;
+                if (e.from_zone) eventText += ` (from ${e.from_zone})`;
+                if (e.dwell_time) eventText += ` after ${e.dwell_time}s`;
+                all_events.push(eventText);
+                statusHTML += `<li>${eventText}</li>`;
             });
-
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const result = await response.json();
-            displayImageWithDetections(file, result.detections);
-
-        } catch (error) {
-            console.error('Error uploading image:', error);
-            imageResult.innerHTML = `<p>Error during inference. See console for details.</p>`;
+            statusHTML += '</ul>';
         }
-    });
+        statusHTML += `<ul class="events-list"><li>${all_events.join('</li><li>')}</li></ul>`;
 
-    function displayImageWithDetections(file, detections) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new Image();
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                ctx.drawImage(img, 0, 0);
+        // Display active objects and their dwell times
+        if (active_objects && Object.keys(active_objects).length > 0) {
+            statusHTML += '<h4>Active Objects in Zones:</h4><ul class="active-objects-list">';
+            for (const [trackId, data] of Object.entries(active_objects)) {
+                statusHTML += `<li>Track ${trackId}: In <strong>${data.zone}</strong> for ${data.dwell_time}s</li>`;
+            }
+            statusHTML += '</ul>';
+        } else {
+            statusHTML += '<p>No objects currently tracked in zones.</p>';
+        }
 
-                // Draw detections
-                ctx.strokeStyle = 'red';
-                ctx.lineWidth = 2;
-                ctx.font = '16px sans-serif';
-                ctx.fillStyle = 'red';
-
-                detections.forEach(det => {
-                    const [x1, y1, x2, y2] = det.bbox;
-                    const label = det.label;
-                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-                    ctx.fillText(label, x1, y1 > 20 ? y1 - 5 : y1 + 20);
-                });
-
-                imageResult.innerHTML = '';
-                imageResult.appendChild(canvas);
-            };
-            img.src = e.target.result;
-        };
-        reader.readAsDataURL(file);
+        videoStatus.innerHTML = statusHTML;
     }
 
-    // --- Video Inference ---
     startVideoBtn.addEventListener('click', () => {
-        videoStatus.textContent = 'Connecting to video stream...';
+        videoStatus.innerHTML = '<h3>Connecting to video stream...</h3>';
         startVideoBtn.disabled = true;
         stopVideoBtn.disabled = false;
 
@@ -179,7 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
             stopVideoBtn.disabled = true;
         };
 
-        eventSource.onmessage = (event) => {
+        eventSource.addEventListener('message', (event) => {
             const data = JSON.parse(event.data);
             const img = new Image();
             img.onload = () => {
@@ -195,21 +171,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 ctx.lineWidth = 2;
                 ctx.font = '14px sans-serif';
 
-                data.detections.forEach(det => {
-                    const [x1, y1, x2, y2] = det.bbox;
-                    const label = `${det.label} #${det.track_id}`;
-                    
-                    // Simple color hashing for tracks
-                    const color = `hsl(${det.track_id * 40 % 360}, 100%, 50%)`;
-                    ctx.strokeStyle = color;
-                    ctx.fillStyle = color;
+                if (data.detections) {
+                    data.detections.forEach(det => {
+                        const [x1, y1, x2, y2] = det.bbox;
+                        const label = `${det.label} #${det.track_id}`;
+                        
+                        // Simple color hashing for tracks
+                        const color = `hsl(${det.track_id * 40 % 360}, 100%, 50%)`;
+                        ctx.strokeStyle = color;
+                        ctx.fillStyle = color;
 
-                    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-                    ctx.fillText(label, x1, y1 > 15 ? y1 - 5 : y1 + 15);
-                });
+                        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                        ctx.fillText(label, x1, y1 > 15 ? y1 - 5 : y1 + 15);
+                    });
+                }
+                
+                // Update the status display with active objects and events
+                updateStatus(data);
             };
             img.src = `data:image/jpeg;base64,${data.image_b64}`;
-        };
+        });
     });
 
     stopVideoBtn.addEventListener('click', () => {

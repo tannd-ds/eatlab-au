@@ -1,8 +1,9 @@
 import argparse
 from pathlib import Path
 from ultralytics import YOLO, settings
-import mlflow
 import os
+
+from .services.mlflow_client import MLflowClient
 
 def train(data_config_path: str, epochs: int, batch_size: int, weights: str, name: str, project: str):
     """
@@ -12,11 +13,10 @@ def train(data_config_path: str, epochs: int, batch_size: int, weights: str, nam
         batch_size (int): Batch size for training.
         weights (str): Path to pretrained weights (.pt file) or a model name like 'yolov8n.pt'.
     """
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI"))
-    mlflow.set_experiment(project)
+    mlflow_client = MLflowClient()
 
-    with mlflow.start_run(run_name=name) as run:
-        mlflow.log_params({
+    with mlflow_client.start_run(experiment_name=project, run_name=name) as run:
+        mlflow_client.log_params({
             "data_config": data_config_path,
             "epochs": epochs,
             "batch_size": batch_size,
@@ -40,8 +40,8 @@ def train(data_config_path: str, epochs: int, batch_size: int, weights: str, nam
     
         print(f"[INFO] Registering model from run {run.info.run_id}.")
         registered_model_name = f"{project}_yolov8n"
-        mlflow.register_model(
-            model_uri=f"mlflow-artifacts:/{run.info.run_id}/artifacts/weights/best.pt",
+        mlflow_client.register_model(
+            model_uri=f"runs:/{run.info.run_id}/artifacts/weights/best.pt",
             name=registered_model_name
         )
         print(f"[INFO] Model '{registered_model_name}' registered from run {run.info.run_id}.")

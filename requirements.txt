@@ -6,6 +6,8 @@ ultralytics
 scikit-learn
 python-multipart
 lap
+shapely
+Pillow
 
 # MLFlow n database
 mlflow
