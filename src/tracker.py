@@ -10,9 +10,11 @@ import asyncio
 import base64
 import time
 from shapely.geometry import Point, Polygon
+
+from PIL import Image
 import torch
 from torchvision import transforms
-from PIL import Image
+import torch.nn as nn
 
 from .track.BaseTrack import TrackedObject
 
@@ -22,38 +24,50 @@ client = mlflow.MlflowClient()
 
 
 class DispatcherTracker:
-    """
-    An intelligent tracker
-    """
-    DEFAULT_MODEL_PATH = Path("models/dispatch_tracker/weights/best.pt")
-
+    """ An intelligent tracker for monitoring dispatch zones """
     def __init__(self, 
-                 weights: str | Path | None = None, 
+                 weights: str | Path = "yolov8n.pt", 
                  device: str | None = None,
                  zones: Dict[str, List[Tuple[int, int]]] | None = None,
+                 detector_experiment: str = 'dispatch_tracker',
                  classifier_experiment: str = 'dispatch_classifier'):
-        if weights:
-            model_path = weights
-            print(f"Loading specified model: {model_path}")
-        elif self.DEFAULT_MODEL_PATH.exists():
-            model_path = self.DEFAULT_MODEL_PATH
-            print(f"Loading custom model from: {model_path}")
-        else:
-            model_path = "yolov8n.pt"
-            print(f"Custom model not found. Loading default YOLOv8n: {model_path}")
 
-        self.model = YOLO(model_path)
-        self.device = device if device else ("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
+        self.detector: YOLO | None = None
+        self.classifier: nn.Module | None = None
+        self.classifier_transform: transforms.Compose | None = None
+        self.classifier_class_names: List[str] = ['empty', 'not_empty', 'kakigori']
 
-        self.tracked_objects: Dict[int, TrackedObject] = {}
         self.zones: Dict[str, Polygon] = {}
+        self.tracked_objects: Dict[int, TrackedObject] = {}
+        self.device = device if device else ("cuda:0" if torch.cuda.is_available() else "cpu")
 
         if zones:
             self.set_zones(zones)
+
+        self.set_detector(weights)
+        self.load_classifier_from_experiment(classifier_experiment)
         
-        # --- Load Classifier ---
-        self.classifier = None
+
+    def set_zones(self, zones: Dict[str, List[Tuple[int, int]]]):
+        """Defines polygonal zones for monitoring."""
+        self.zones = {name: Polygon(points) for name, points in zones.items()}
+        print(f"Zones set: {list(self.zones.keys())}")
+
+    def set_detector(self, detector: YOLO | str):
+        if isinstance(detector, str):
+            detector = YOLO(detector)
+
+        self.detector = detector
+        self.detector.to(self.device)
+        print(f"[INFO] Successfully loaded detector")
+
+    def set_classifier(self, classifier: nn.Module):
+        self.classifier = classifier
+        self.classifier.to(self.device)
+        self.classifier.eval()
+        print(f"[INFO] Successfully loaded classifier")
+
+    def load_classifier_from_experiment(self, classifier_experiment: str = 'dispatch_classifier'):
         try:
             print(f"Attempting to load classifier from experiment '{classifier_experiment}'...")
             experiment = client.get_experiment_by_name(classifier_experiment)
@@ -62,7 +76,6 @@ class DispatcherTracker:
                 model_uri = None
             else:
                 experiment_id = experiment.experiment_id
-                
                 logged_models = client.search_logged_models(
                     experiment_ids=[experiment_id],
                     max_results=1
@@ -76,24 +89,26 @@ class DispatcherTracker:
                 else:
                     print(f"No logged models found in experiment '{classifier_experiment}'. Classifier will not be loaded.")
 
-            self.classifier = mlflow.pytorch.load_model(model_uri, map_location=self.device)
-            self.classifier.eval()
-            print(f"Successfully loaded classifier model from run '{model_uri}'")
-            
-            self.classifier_transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            ])
-            self.classifier_class_names = ['empty', 'not_empty', 'kakigori']
+            self.set_classifier(mlflow.pytorch.load_model(model_uri, map_location=self.device))
+            self.set_classifier_transform()
+            self.set_classifier_class_names()
         except Exception as e:
             print(f"Error loading classifier model: {e}. Classifier not loaded.")
 
-    def set_zones(self, zones: Dict[str, List[Tuple[int, int]]]):
-        """Defines polygonal zones for monitoring."""
-        self.zones = {name: Polygon(points) for name, points in zones.items()}
-        print(f"Zones set: {list(self.zones.keys())}")
+    def set_classifier_transform(self, transform: transforms.Compose | None = None):
+        if transform:
+            self.classifier_transform = transform
+            return
+        
+        self.classifier_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+    def set_classifier_class_names(self, class_names: List[str] = ['empty', 'not_empty', 'kakigori']):
+        self.classifier_class_names = class_names
 
     def _find_zone_for_point(self, point: Point) -> str | None:
         """Finds which zone a point is inside."""
@@ -104,6 +119,7 @@ class DispatcherTracker:
 
     def _predict_dish(self, frame_crop: np.ndarray) -> str | None:
         if not self.classifier:
+            print(f"[WARN] predict_dish called but no classifier loaded")
             return None
         
         try:
@@ -171,7 +187,7 @@ class DispatcherTracker:
                     cv2.polylines(frame, [pts], isClosed=True, color=(0, 255, 255), thickness=2)
                     cv2.putText(frame, name, (pts[0][0], pts[0][1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
-                    results = self.model.track(frame_to_track, stream=False, persist=True, verbose=False)
+                    results = self.detector.track(frame_to_track, stream=False, persist=True, verbose=False)
                     if results:
                         results = results[0]
 
@@ -193,7 +209,7 @@ class DispatcherTracker:
                         frame_detections.append({
                             "bbox": [x1, y1, x2, y2],
                             "confidence": float(box.conf.item()),
-                            "label": self.model.names[int(box.cls.item())] + '_' + dish_name,
+                            "label": self.detector.names[int(box.cls.item())] + '_' + dish_name,
                             "track_id": track_id,
                         })
 
@@ -232,7 +248,7 @@ class DispatcherTracker:
 
         Returns a list of dicts {bbox, confidence, class_id, label}.
         """
-        results = self.model(image, verbose=False)[0]
+        results = self.detector(image, verbose=False)[0]
         output: List[Dict[str, Any]] = []
         for box in results.boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
@@ -240,7 +256,7 @@ class DispatcherTracker:
                 "bbox": [x1, y1, x2, y2],
                 "confidence": float(box.conf.item()),
                 "class_id": int(box.cls.item()),
-                "label": self.model.names[int(box.cls.item())],
+                "label": self.detector.names[int(box.cls.item())],
             })
         return output
 

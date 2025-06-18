@@ -1,13 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any
-from pathlib import Path
-import shutil
-import uuid
-import tempfile
 import mlflow
 import os
 
@@ -18,7 +14,7 @@ app = FastAPI(title="Dispatch Monitoring System")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Globals ---
-detector: DispatcherTracker | None = None
+tracker: DispatcherTracker | None = None
 VIDEO_PATH = "datasets/AU/1473_CH05_20250501133703_154216.mp4"
 DISPATCH_ZONES = {
     "staging_area": [
@@ -29,11 +25,10 @@ DISPATCH_ZONES = {
 @app.on_event("startup")
 def startup_event():
     """Initialise the model tracker and database on startup."""
-    global detector
-    database.init_db()
+    global tracker
     mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
-    detector = DispatcherTracker()
-    detector.set_zones(DISPATCH_ZONES)
+    tracker = DispatcherTracker()
+    tracker.set_zones(DISPATCH_ZONES)
     print("Default model loaded and zones configured.")
 
 
@@ -88,7 +83,7 @@ def get_experiments() -> List[Dict[str, Any]]:
 @app.post("/load-model")
 async def load_model(payload: Dict[str, str]):
     """Load a new model from the specified MLflow artifact path."""
-    global detector
+    global tracker
     artifact_path = payload.get("artifact_path")
     run_id = payload.get("run_id")
 
@@ -97,13 +92,11 @@ async def load_model(payload: Dict[str, str]):
 
     try:
         print(f"Attempting to load model '{artifact_path}' from run '{run_id}'...")
-        # store the chosen weights in a temporary directory
         model_uri = f"runs:/{run_id}/{artifact_path}"
         local_path = mlflow.artifacts.download_artifacts(model_uri)
         
-        # Re-init
-        detector = DispatcherTracker(weights=local_path)
-        detector.set_zones(DISPATCH_ZONES)
+        tracker.set_detector(local_path)
+        tracker.set_zones(DISPATCH_ZONES)
         print(f"Successfully loaded model from {local_path}")
         return {"message": f"Model '{artifact_path}' loaded successfully."}
     except Exception as e:
@@ -119,9 +112,9 @@ def health_check() -> Dict[str, str]:
 @app.get("/video-stream")
 async def video_stream(request: Request):
     """Streams annotated video frames using Server-Sent Events."""
-    if not detector:
+    if not tracker:
         raise HTTPException(status_code=503, detail="Model not loaded. Please select a model.")
-    stream_generator = detector.track_video_stream(VIDEO_PATH)
+    stream_generator = tracker.track_video_stream(VIDEO_PATH)
     return EventSourceResponse(stream_generator, media_type="text/event-stream")
 
 
