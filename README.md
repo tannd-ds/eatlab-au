@@ -164,6 +164,20 @@ Just a simple UI. First, Go to `http://localhost:8000`, select the experiment an
 
 After you load the Detector, you can click on "Start Video Inference", wait a bit, and there you go.
 
+# Future Plan for User Feedback
+
+Unfortunately, the User Feedback functionality has not yet been functional in this current system. Some thoughts on how to integrate it in the future:
+
+- First, I've planned for the `/feedback` API endpoint from the beginning. This currently captures detailed user corrections, including (1) frame numbers, (2) bounding boxes, and (3) correct labels. This data will be stored in the same `postgre` Database thta MLFlow use.
+
+- To create train data from the user feedback, we can:
+    -   Query the database for new feedback entries.
+    -   Extract relevant video frames and crop bounding boxes.
+    -   Organize this new data into training and validation sets compatible with the YOLO detector and ResNet classifier formats.
+
+- With the data ready, we can write re-train script, the script could be triggered and run on command.
+
+- Of course this re-train process will be track using MLFlow as with the initial train. From that, we will have all the information needed to compare/validate the models, and simply choose what best model to be use in the System (production).
 
 ##  5. Screenshots
 
