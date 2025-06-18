@@ -3,7 +3,6 @@ from typing import List, Dict, Any, AsyncGenerator, Tuple
 from ultralytics import YOLO
 import cv2
 import numpy as np
-import mlflow
 import os
 import json
 import asyncio
@@ -17,10 +16,7 @@ from torchvision import transforms
 import torch.nn as nn
 
 from .track.BaseTrack import TrackedObject
-
-# --- Globals ---
-mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
-client = mlflow.MlflowClient()
+from .services.mlflow_client import MLflowClient
 
 
 class DispatcherTracker:
@@ -32,6 +28,7 @@ class DispatcherTracker:
                  detector_experiment: str = 'dispatch_tracker',
                  classifier_experiment: str = 'dispatch_classifier'):
 
+        self.mlflow_client = MLflowClient()
         self.detector: YOLO | None = None
         self.classifier: nn.Module | None = None
         self.classifier_transform: transforms.Compose | None = None
@@ -70,28 +67,16 @@ class DispatcherTracker:
     def load_classifier_from_experiment(self, classifier_experiment: str = 'dispatch_classifier'):
         try:
             print(f"Attempting to load classifier from experiment '{classifier_experiment}'...")
-            experiment = client.get_experiment_by_name(classifier_experiment)
-            if not experiment:
-                print(f"MLflow experiment '{classifier_experiment}' not found. Classifier will not be loaded.")
-                model_uri = None
+            model_uri = self.mlflow_client.get_latest_model_uri_from_experiment(classifier_experiment)
+
+            if model_uri:
+                print(f"Found latest classifier model URI: {model_uri}")
+                self.set_classifier(self.mlflow_client.load_pytorch_model(model_uri, device=self.device))
+                self.set_classifier_transform()
+                self.set_classifier_class_names()
             else:
-                experiment_id = experiment.experiment_id
-                logged_models = client.search_logged_models(
-                    experiment_ids=[experiment_id],
-                    max_results=1
-                )
+                print(f"No logged models found in experiment '{classifier_experiment}'. Classifier will not be loaded.")
 
-                model_uri = None
-                if logged_models:
-                    latest_model = logged_models[0]
-                    model_uri = latest_model.artifact_location
-                    print(f"Found latest classifier model URI: {model_uri}")
-                else:
-                    print(f"No logged models found in experiment '{classifier_experiment}'. Classifier will not be loaded.")
-
-            self.set_classifier(mlflow.pytorch.load_model(model_uri, map_location=self.device))
-            self.set_classifier_transform()
-            self.set_classifier_class_names()
         except Exception as e:
             print(f"Error loading classifier model: {e}. Classifier not loaded.")
 

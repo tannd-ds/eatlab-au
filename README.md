@@ -16,6 +16,50 @@ Requirements:
 - Upload all source code and trained models to *GitHub.*
 ```
 
+Features
+--------
+Update later
+
+Directory Layout
+----------------
+```
+eatlab-au-tracker/
+├── config.env.example          # Example for environment variables
+├── .gitignore
+├── docker-compose.yml
+├── mlflow.Dockerfile
+├── README.md
+├── requirements.txt
+├── configs/                     
+│   ├── dispatch_data.yaml      # Config for train Detector
+│   └── settings.py             # TODO
+├── scripts/                    # TODO (refactor)
+│   ├── train_detector.py       # src/train.py
+│   └── train_classifier.py     # src/scripts/train_resnet.py
+├── src/                        # Main application source code
+│   ├── __init__.py
+│   ├── main.py                 # TODO: Main FastAPI app entrypoint
+│   ├── api/                    # TODO: For API-related modules
+│   │   ├── __init__.py
+│   │   ├── endpoints.py        # Logic from your old api.py
+│   │   └── schemas.py          # Pydantic models (e.g., FeedbackIn)
+│   ├── models/                 # For model interaction logic
+│   │   ├── __init__.py
+│   │   ├── classifier.py       # Handles loading and running the classifier
+│   │   └── detector.py         # Handles loading and running the YOLO detector
+│   ├── services/               # external services
+│   │   ├── __init__.py
+│   │   ├── feedback.py         # TODO
+│   │   └── mlflow_client.py    # Dedicated client for all MLflow interactions
+│   └── track/                  # "track" related functionalities
+│       ├── __init__.py
+│       └── BaseTrack.py   
+└── static/                     # UI
+    ├── index.html
+    ├── script.js
+    └── style.css
+```
+
 Prerequisites
 -------------
 * Docker
@@ -24,10 +68,11 @@ Quick Start
 -----------
 1. Clone the repository (or download the code).
 2. Place the provided `datasets/` folder alongside this README.
+3. Copy the `config.env
 3. Build & start the service:
 
    ```bash
-   docker compose up --build
+   docker compose --env-file config.env up -d --build
    ```
 4. Open your browser at `http://localhost:8000/docs` to explore the interactive Swagger UI.
 

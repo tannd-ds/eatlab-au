@@ -3,18 +3,19 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any
-import mlflow
+from typing import List, Dict, Any, Optional
 import os
 
 from .tracker import DispatcherTracker
-from .feedback import save_feedback
+from .services.feedback import save_feedback
+from .services.mlflow_client import MLflowClient
 
 app = FastAPI(title="Dispatch Monitoring System")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- Globals ---
-tracker: DispatcherTracker | None = None
+tracker: Optional[DispatcherTracker] = None
+mlflow_client: Optional[MLflowClient] = None
 VIDEO_PATH = "datasets/AU/1473_CH05_20250501133703_154216.mp4"
 DISPATCH_ZONES = {
     "staging_area": [
@@ -25,8 +26,8 @@ DISPATCH_ZONES = {
 @app.on_event("startup")
 def startup_event():
     """Initialise the model tracker and database on startup."""
-    global tracker
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
+    global tracker, mlflow_client
+    mlflow_client = MLflowClient()
     tracker = DispatcherTracker()
     tracker.set_zones(DISPATCH_ZONES)
     print("Default model loaded and zones configured.")
@@ -49,41 +50,18 @@ async def read_root(request: Request):
 @app.get("/experiments")
 def get_experiments() -> List[Dict[str, Any]]:
     """Fetch all experiments and their runs from MLflow."""
-    experiments_data = []
-    experiments = mlflow.search_experiments()
-    for exp in experiments:
-        runs_data = []
-        runs = mlflow.search_runs(experiment_ids=[exp.experiment_id])
-        if runs.empty:
-            continue
-        
-        for _, run in runs.iterrows():
-            artifact_uri = run.artifact_uri
-            try:
-                artifacts = mlflow.artifacts.list_artifacts(artifact_uri + "/weights")
-                if artifacts:
-                     runs_data.append({
-                        "run_id": run.run_id,
-                        "run_name": run.get("tags.mlflow.runName", "default"),
-                        "artifacts": [f.path for f in artifacts],
-                        "artifact_uri": artifact_uri
-                    })
-            except Exception as e:
-                print(f"Could not list artifacts for run {run.run_id}: {e}")
-        
-        if runs_data:
-            experiments_data.append({
-                "id": exp.experiment_id,
-                "name": exp.name,
-                "runs": runs_data
-            })
-    return experiments_data
+    if not mlflow_client:
+        raise HTTPException(status_code=503, detail="MLflow client not initialized.")
+    return mlflow_client.get_experiments()
 
 
 @app.post("/load-model")
 async def load_model(payload: Dict[str, str]):
     """Load a new model from the specified MLflow artifact path."""
     global tracker
+    if not tracker or not mlflow_client:
+        raise HTTPException(status_code=503, detail="Tracker or MLflow client not initialized.")
+
     artifact_path = payload.get("artifact_path")
     run_id = payload.get("run_id")
 
@@ -92,8 +70,7 @@ async def load_model(payload: Dict[str, str]):
 
     try:
         print(f"Attempting to load model '{artifact_path}' from run '{run_id}'...")
-        model_uri = f"runs:/{run_id}/{artifact_path}"
-        local_path = mlflow.artifacts.download_artifacts(model_uri)
+        local_path = mlflow_client.load_model(run_id=run_id, artifact_path=artifact_path)
         
         tracker.set_detector(local_path)
         tracker.set_zones(DISPATCH_ZONES)

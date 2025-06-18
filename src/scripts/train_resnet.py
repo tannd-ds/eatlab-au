@@ -7,8 +7,8 @@ from torchvision import transforms
 from torchvision.models import resnet18, ResNet18_Weights
 from PIL import Image
 import copy
-import mlflow
-import mlflow.pytorch
+
+from src.services.mlflow_client import MLflowClient
 
 def get_paths_and_labels(data_dir):
     base_dir = os.path.join(data_dir, 'datasets/AU/Dataset/Classification')
@@ -64,7 +64,7 @@ class CustomImageDataset(Dataset):
             image = self.transform(image)
         return image, label
 
-def train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs=25):
+def train_model(model, criterion, optimizer, train_loader, val_loader, mlflow_client: MLflowClient, num_epochs=25):
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
     
@@ -108,11 +108,9 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
             epoch_acc = running_corrects.double() / len(dataloader.dataset)
             
             if phase == 'train':
-                mlflow.log_metric("train_loss", epoch_loss, epoch)
-                mlflow.log_metric("train_acc", epoch_acc, epoch)
+                mlflow_client.log_metrics({"train_loss": epoch_loss, "train_acc": epoch_acc}, step=epoch)
             else:
-                mlflow.log_metric("val_loss", epoch_loss, epoch)
-                mlflow.log_metric("val_acc", epoch_acc, epoch)
+                mlflow_client.log_metrics({"val_loss": epoch_loss, "val_acc": epoch_acc}, step=epoch)
 
             print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
 
@@ -120,7 +118,7 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
                 torch.save(model.state_dict(), 'best_model.pth')
-                mlflow.pytorch.log_model(model, "best_model")
+                mlflow_client.log_pytorch_model(model, "best_model")
 
     print(f'Best val Acc: {best_acc:4f}')
     model.load_state_dict(best_model_wts)
@@ -129,9 +127,7 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
 def main():
     data_dir = '.' # Assumes script is run from project root
     
-    # MLflow setup
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
-    mlflow.set_experiment('dispatch_classifier')
+    mlflow_client = MLflowClient()
     
     data_transforms = {
         'train': transforms.Compose([
@@ -170,14 +166,16 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
-    with mlflow.start_run() as run:
-        mlflow.log_param("learning_rate", 0.001)
-        mlflow.log_param("optimizer", "SGD")
-        mlflow.log_param("epochs", 25)
-        mlflow.log_param("batch_size", 32)
+    with mlflow_client.start_run(experiment_name='dispatch_classifier', run_name='resnet_run') as run:
+        mlflow_client.log_params({
+            "learning_rate": 0.001,
+            "optimizer": "SGD",
+            "epochs": 25,
+            "batch_size": 32,
+        })
         
         print(f"MLflow Run ID: {run.info.run_id}")
-        train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs=25)
+        train_model(model, criterion, optimizer, train_loader, val_loader, mlflow_client, num_epochs=25)
 
 if __name__ == '__main__':
     main() 
