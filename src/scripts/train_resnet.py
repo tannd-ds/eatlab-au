@@ -8,7 +8,7 @@ from torchvision.models import resnet18, ResNet18_Weights
 from PIL import Image
 import copy
 
-from src.services.mlflow_client import MLflowClient
+from ..services.mlflow_client import MLflowClient
 
 def get_paths_and_labels(data_dir):
     base_dir = os.path.join(data_dir, 'datasets/AU/Dataset/Classification')

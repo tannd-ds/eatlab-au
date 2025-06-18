@@ -21,3 +21,6 @@ datasets/Au
 datasets/*.mp4
 models/
 logs/
+
+# Env credentials
+*.env

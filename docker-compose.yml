@@ -30,7 +30,7 @@ services:
       - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_PORT}" 
     command: server /data
     volumes:
-      - minio_data:/data
+      - ./data:/data
     networks:
       - au-network
 
@@ -84,6 +84,8 @@ services:
     volumes:
       - ./datasets:/app/datasets
       - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./static:/app/static
     ports:
       - "${DISPATCH_MONITOR_PORT}:${DISPATCH_MONITOR_PORT}"
     environment:
