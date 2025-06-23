@@ -93,11 +93,14 @@ class MLflowClient:
         experiment_id = experiment.experiment_id
         logged_model_latest = self.client.search_logged_models(
             experiment_ids=[experiment_id],
+            order_by=[{
+                "field_name": "last_updated_timestamp",
+                "ascending": False
+            }],
             max_results=1
         )
 
         if not logged_model_latest:
             return None
-        
-        latest_model = logged_model_latest[0]
-        return latest_model.artifact_location
+
+        return logged_model_latest[0].model_uri
