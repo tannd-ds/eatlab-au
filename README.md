@@ -132,31 +132,34 @@ You can do the opposite (export your data from Postgre and MinIO) by using the o
 
 The system relies on two separate models. You must train them to make the system fully operational. Training runs are automatically logged and stored to the MLflow server.
 
-### 3.1. Training the Detector (YOLO)
+To streamline the development process, training is managed via Docker Compose profiles. This isolates the training environment and prevents training from running automatically every time you start the application.
 
-This model detects objects like `dish` and `tray`. The training service for this is commented out by default in `docker-compose.yml`.
+### 3.1. Training the Detector (YOLOv10)
 
-1.  **Uncomment the `train` service** in your `docker-compose.yml` file. It's at the bottom of the file.
+This model detects objects like `dish` and `tray`.
 
-2.  **Run the training process**:
-    ```bash
-    docker-compose --env-file config.env run --rm train
-    ```
-    This command starts a temporary container, runs the training script (`src/train.py`), and then removes the container. The script will log the trained model, metrics, and artifacts to MLflow under the `dispatch_tracker` experiment.
+To run the training process, use the `train-detector` profile:
+```bash
+docker compose --env-file config.env up --build --profile train-detector
+```
+This command builds the necessary image and starts a container to run the detector training script. The script logs the trained model, metrics, and artifacts to MLflow under the `dispatch_tracker` experiment.
 
-3.  **Load the Trained Detector**: After training, you must manually load the detector model via the web interface. Go to `http://localhost:8000`, select the experiment and run, and click "Load Model".
+After training, you must manually load the detector model via the web interface. Go to `http://localhost:8000`, select the experiment and run, and click "Load Model".
 
 ### 3.2. Training the Classifier (ResNet)
 
 This model classifies the *contents* of a detected dish (e.g., `kakigori`).
 
-1.  **Run the training script**: This script is run inside the main `dispatch-monitor` service.
-    ```bash
-    docker-compose --env-file config.env exec dispatch-monitor python -m src.scripts.train_resnet
-    ```
-    This will execute the script, which trains the ResNet model and logs it to MLflow under the `dispatch_classifier` experiment.
+To run the training, use the `train-classifier` profile:
+```bash
+docker compose --env-file config.env up --build --profile train-classifier
+```
+This will execute the script, which trains the ResNet model and logs it to MLflow under the `dispatch_classifier` experiment.
 
-2.  **Automatic Loading**: The system is designed to **automatically load the latest version of the classifier** from the `dispatch_classifier` experiment every time the `dispatch-monitor` container starts. After training, simply restart the service to use your new model.
+The system is designed to **automatically load the latest version of the classifier** from the `dispatch_classifier` experiment every time the `dispatch-monitor` container starts. After training, simply restart the main application services to use your new model:
+```bash
+docker compose --env-file config.env up -d
+```
 
 ## 4. The User Interface (UI)
 
@@ -164,7 +167,7 @@ Just a simple UI. First, Go to `http://localhost:8000`, select the experiment an
 
 After you load the Detector, you can click on "Start Video Inference", wait a bit, and there you go.
 
-# Future Plan for User Feedback
+## 5. Future Plan for User Feedback
 
 Unfortunately, the User Feedback functionality has not yet been functional in this current system. Some thoughts on how to integrate it in the future:
 
@@ -179,7 +182,7 @@ Unfortunately, the User Feedback functionality has not yet been functional in th
 
 - Of course this re-train process will be track using MLFlow as with the initial train. From that, we will have all the information needed to compare/validate the models, and simply choose what best model to be use in the System (production).
 
-##  5. Screenshots
+##  6. Screenshots
 
 ![alt text](public/screenshot_01.png)
 ![alt text](public/screenshot_02.png)
