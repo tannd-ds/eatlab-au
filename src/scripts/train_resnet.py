@@ -75,6 +75,8 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, mlflow_cl
         print(f'Epoch {epoch}/{num_epochs - 1}')
         print('-' * 10)
 
+        log_metrics = {}
+
         for phase in ['train', 'val']:
             if phase == 'train':
                 model.train()
@@ -108,9 +110,11 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, mlflow_cl
             epoch_acc = running_corrects.double() / len(dataloader.dataset)
             
             if phase == 'train':
-                mlflow_client.log_metrics({"train_loss": epoch_loss, "train_acc": epoch_acc}, step=epoch)
+                log_metrics["train_loss"] = epoch_loss
+                log_metrics["train_acc"] = epoch_acc
             else:
-                mlflow_client.log_metrics({"val_loss": epoch_loss, "val_acc": epoch_acc}, step=epoch)
+                log_metrics["val_loss"] = epoch_loss
+                log_metrics["val_acc"] = epoch_acc
 
             print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
 
@@ -118,7 +122,9 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, mlflow_cl
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
                 torch.save(model.state_dict(), 'best_model.pth')
-                mlflow_client.log_pytorch_model(model, "best_model")
+                mlflow_client.log_pytorch_model(model, f"best_model_{epoch}", step=epoch)
+
+        mlflow_client.log_metrics(log_metrics, step=epoch)
 
     print(f'Best val Acc: {best_acc:4f}')
     model.load_state_dict(best_model_wts)
@@ -146,7 +152,6 @@ def main():
 
     paths_and_labels = get_paths_and_labels(data_dir)
     train_size = int(0.8 * len(paths_and_labels))
-    val_size = len(paths_and_labels) - train_size
     
     # Manual split of paths and labels
     indices = torch.randperm(len(paths_and_labels)).tolist()
@@ -156,8 +161,16 @@ def main():
     train_dataset = CustomImageDataset(train_paths_and_labels, transform=data_transforms['train'])
     val_dataset = CustomImageDataset(val_paths_and_labels, transform=data_transforms['val'])
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=2)
+    train_loader = DataLoader(train_dataset, 
+                              batch_size=32, 
+                              shuffle=True, 
+                              num_workers=0, # TODO: If we use num_workers > 0 in docker, it will cause error
+                              pin_memory=True)
+    val_loader = DataLoader(val_dataset, 
+                            batch_size=32, 
+                            shuffle=False, 
+                            num_workers=0, # TODO: If we use num_workers > 0 in docker, it will cause error
+                            pin_memory=True)
 
     model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
     num_ftrs = model.fc.in_features
