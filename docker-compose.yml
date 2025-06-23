@@ -47,6 +47,7 @@ services:
       done;
 
       /usr/bin/mc mb myminio/mlflow;
+      /usr/bin/mc mb myminio/main;
       /usr/bin/mc policy set public myminio/mlflow;
       exit 0;
       "
@@ -74,7 +75,6 @@ services:
       --artifacts-destination s3://${MINIO_BUCKET_NAME}
     depends_on:
       - postgres
-      - create-buckets
     networks:
       - au-network
 
@@ -84,7 +84,6 @@ services:
     volumes:
       - ./datasets:/app/datasets
       - ./src:/app/src
-      - ./scripts:/app/scripts
       - ./static:/app/static
     ports:
       - "${DISPATCH_MONITOR_PORT}:${DISPATCH_MONITOR_PORT}"
@@ -105,21 +104,48 @@ services:
     networks:
       - au-network
 
-  train:
+  train-detector:
     build: .
-    container_name: dispatch-monitor-training
+    profiles:
+      - "train-detector"
     command: >
-      python src/train.py 
-      --data dispatch_data.yaml 
+      python -m src.scripts.train 
+      --data configs/dispatch_data.yaml 
       --epochs 50 
       --batch-size 8 
-      --weights yolov8n.pt
+      --weights yolov10n.pt
       --project dispatch_tracker
       --name ${INITIAL_RUN_NAME}
     volumes:
       - ./datasets:/app/datasets
       - ./src:/app/src
-      - ./dispatch_data.yaml:/app/dispatch_data.yaml
+      - ./configs:/app/configs
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_PORT}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - mlflow
+    networks:
+      - au-network
+
+  train-classifier:
+    build: .
+    profiles:
+      - "train-classifier"
+    command: >
+      python -m src.scripts.train_resnet
+    volumes:
+      - ./datasets:/app/datasets
+      - ./src:/app/src
     environment:
       - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_PORT}
       - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
