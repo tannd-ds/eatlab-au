@@ -19,7 +19,6 @@ Thumbs.db
 # Data & models
 datasets/Au
 datasets/*.mp4
-models/
 logs/
 
 # Env credentials

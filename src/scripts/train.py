@@ -3,7 +3,7 @@ from pathlib import Path
 from ultralytics import YOLO, settings
 import os
 
-from .services.mlflow_client import MLflowClient
+from ..services.mlflow_client import MLflowClient
 
 def train(data_config_path: str, epochs: int, batch_size: int, weights: str, name: str, project: str):
     """
